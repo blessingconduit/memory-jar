@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Memory Jar">
+<title>Memory Jar</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#dff3fb">
+<link rel="apple-touch-icon" href="icon.png">
+<script src="matter.min.js"></script>
+<style>
+  :root { --ink:#2f5d62; --sky1:#dff3fb; --sky2:#bfe3d0; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  body { margin:0; height:100vh; overflow:hidden; font-family:-apple-system, system-ui, sans-serif;
+         background:linear-gradient(var(--sky1), var(--sky2)); color:var(--ink); }
+  h1 { text-align:center; margin:12px 0 0; font-size:28px; }
+  canvas { display:block; margin:0 auto; touch-action:none; }
+  .bar { position:fixed; bottom:0; left:0; right:0; padding:10px 12px calc(10px + env(safe-area-inset-bottom));
+         display:flex; gap:8px; justify-content:center; background:rgba(255,255,255,.6); backdrop-filter:blur(8px); }
+  button { border:0; border-radius:14px; padding:10px 14px; font-size:16px; background:var(--ink); color:#fff; }
+  button.ghost { background:#fff; color:var(--ink); }
+  dialog { border:0; border-radius:20px; width:min(92vw,420px); padding:18px; color:var(--ink); }
+  dialog::backdrop { background:rgba(0,0,0,.25); }
+  textarea { width:100%; height:110px; border-radius:12px; border:2px solid #cfe5e8; padding:10px; font-size:16px; }
+  .kinds { display:flex; gap:10px; justify-content:center; margin:10px 0; }
+  .kinds label { font-size:30px; padding:6px; border-radius:50%; border:3px solid transparent; }
+  .kinds input { display:none; }
+  .kinds input:checked + span { outline:3px solid var(--ink); border-radius:50%; }
+  .row { display:flex; gap:8px; justify-content:flex-end; margin-top:12px; }
+  #viewDate { font-size:13px; opacity:.7; }
+</style>
+</head>
+<body>
+<h1>Memory Jar</h1>
+<canvas id="c"></canvas>
+
+<div class="bar">
+  <button id="addBtn">+ Add memory</button>
+  <button class="ghost" id="exportBtn">Export</button>
+  <button class="ghost" id="importBtn">Import</button>
+  <input type="file" id="importFile" accept="application/json" hidden>
+</div>
+
+<dialog id="addDlg">
+  <form method="dialog">
+    <b>What made today good?</b>
+    <textarea id="text" placeholder="A little moment worth keeping..."></textarea>
+    <div class="kinds">
+      <label><input type="radio" name="kind" value="sun" checked><span>🌞</span></label>
+      <label><input type="radio" name="kind" value="sprout"><span>🌱</span></label>
+      <label><input type="radio" name="kind" value="chat"><span>💬</span></label>
+      <label><input type="radio" name="kind" value="flower"><span>🌷</span></label>
+    </div>
+    <div class="row">
+      <button class="ghost" value="cancel">Cancel</button>
+      <button id="saveBtn" value="save">Drop it in</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="viewDlg">
+  <div id="viewDate"></div>
+  <p id="viewText"></p>
+  <div class="row">
+    <button class="ghost" id="delBtn">Remove</button>
+    <button id="closeBtn">Close</button>
+  </div>
+</dialog>
+
+<script>
+// ---------- Storage (IndexedDB) ----------
+const DB = { db:null,
+  open() { return new Promise((res, rej) => {
+    const r = indexedDB.open('memoryJar', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('memories', { keyPath:'id' });
+    r.onsuccess = () => { this.db = r.result; res(); };
+    r.onerror = () => rej(r.error);
+  });},
+  tx(mode) { return this.db.transaction('memories', mode).objectStore('memories'); },
+  all() { return new Promise(res => { const r = this.tx('readonly').getAll(); r.onsuccess = () => res(r.result); }); },
+  put(m) { return new Promise(res => { this.tx('readwrite').put(m).onsuccess = res; }); },
+  del(id) { return new Promise(res => { this.tx('readwrite').delete(id).onsuccess = res; }); }
+};
+// Ask iOS/Chrome to keep our data
+if (navigator.storage && navigator.storage.persist) navigator.storage.persist();
+
+// ---------- Physics ----------
+const { Engine, Bodies, Composite, Query } = Matter;
+const engine = Engine.create(); engine.gravity.y = 1;
+const canvas = document.getElementById('c'), ctx = canvas.getContext('2d');
+const W = Math.min(window.innerWidth, 480), H = window.innerHeight - 140;
+const dpr = window.devicePixelRatio || 1;
+canvas.width = W * dpr; canvas.height = H * dpr;
+canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
+ctx.scale(dpr, dpr);
+
+const jar = { x: W * 0.12, y: H * 0.18, w: W * 0.76, h: H * 0.78 };
+const wall = 20, opt = { isStatic:true };
+Composite.add(engine.world, [
+  Bodies.rectangle(jar.x + jar.w/2, jar.y + jar.h + wall/2, jar.w, wall, opt),   // floor
+  Bodies.rectangle(jar.x - wall/2, jar.y + jar.h/2, wall, jar.h, opt),          // left
+  Bodies.rectangle(jar.x + jar.w + wall/2, jar.y + jar.h/2, wall, jar.h, opt)   // right
+]);
+
+const COLORS = { sun:'#f9d65c', sprout:'#8cc56b', chat:'#5bbccc', flower:'#f08a5d' };
+const R = Math.max(22, Math.min(32, W / 14));
+
+function dropToken(mem, fromTop = true) {
+  const x = jar.x + R + Math.random() * (jar.w - 2*R);
+  const y = fromTop ? jar.y - R * 2 : jar.y + jar.h - R - Math.random() * jar.h * 0.5;
+  const b = Bodies.circle(x, y, R, { restitution:0.35, friction:0.2, density:0.002 });
+  b.mem = mem; b.face = Math.random();
+  Composite.add(engine.world, b);
+}
+
+// ---------- Drawing ----------
+function drawJar() {
+  ctx.save();
+  ctx.fillStyle = 'rgba(255,255,255,.35)'; ctx.strokeStyle = 'rgba(255,255,255,.9)'; ctx.lineWidth = 6;
+  const r = 40;
+  ctx.beginPath();
+  ctx.moveTo(jar.x, jar.y);
+  ctx.lineTo(jar.x, jar.y + jar.h - r);
+  ctx.quadraticCurveTo(jar.x, jar.y + jar.h, jar.x + r, jar.y + jar.h);
+  ctx.lineTo(jar.x + jar.w - r, jar.y + jar.h);
+  ctx.quadraticCurveTo(jar.x + jar.w, jar.y + jar.h, jar.x + jar.w, jar.y + jar.h - r);
+  ctx.lineTo(jar.x + jar.w, jar.y);
+  ctx.fill(); ctx.stroke();
+  // cork
+  ctx.fillStyle = '#d9a982';
+  ctx.beginPath(); ctx.roundRect(jar.x + jar.w*0.18, jar.y - 34, jar.w*0.64, 30, 8); ctx.fill();
+  ctx.restore();
+}
+function drawToken(b) {
+  const { x, y } = b.position, c = COLORS[b.mem.kind] || COLORS.sun;
+  ctx.save(); ctx.translate(x, y); ctx.rotate(b.angle);
+  ctx.fillStyle = c; ctx.beginPath(); ctx.arc(0, 0, R, 0, Math.PI*2); ctx.fill();
+  // face
+  ctx.fillStyle = '#3b3b3b';
+  ctx.beginPath(); ctx.arc(-R*0.3, -R*0.1, R*0.08, 0, Math.PI*2); ctx.arc(R*0.3, -R*0.1, R*0.08, 0, Math.PI*2); ctx.fill();
+  ctx.strokeStyle = '#3b3b3b'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(0, R*0.1, R*0.22, 0.15*Math.PI, 0.85*Math.PI); ctx.stroke();
+  ctx.fillStyle = 'rgba(255,120,120,.5)';
+  ctx.beginPath(); ctx.arc(-R*0.55, R*0.15, R*0.12, 0, Math.PI*2); ctx.arc(R*0.55, R*0.15, R*0.12, 0, Math.PI*2); ctx.fill();
+  ctx.restore();
+}
+function loop() {
+  Engine.update(engine, 1000/60);
+  ctx.clearRect(0, 0, W, H);
+  drawJar();
+  Composite.allBodies(engine.world).forEach(b => { if (b.mem) drawToken(b); });
+  requestAnimationFrame(loop);
+}
+
+// ---------- UI ----------
+const addDlg = document.getElementById('addDlg'), viewDlg = document.getElementById('viewDlg');
+let viewing = null;
+document.getElementById('addBtn').onclick = () => { document.getElementById('text').value = ''; addDlg.showModal(); };
+addDlg.addEventListener('close', async () => {
+  if (addDlg.returnValue !== 'save') return;
+  const text = document.getElementById('text').value.trim(); if (!text) return;
+  const kind = document.querySelector('input[name=kind]:checked').value;
+  const mem = { id: crypto.randomUUID(), text, kind, date: new Date().toISOString() };
+  await DB.put(mem); dropToken(mem);
+});
+canvas.addEventListener('pointerdown', e => {
+  const r = canvas.getBoundingClientRect();
+  const hit = Query.point(Composite.allBodies(engine.world), { x: e.clientX - r.left, y: e.clientY - r.top }).find(b => b.mem);
+  if (!hit) return;
+  viewing = hit;
+  document.getElementById('viewDate').textContent = new Date(hit.mem.date).toLocaleDateString(undefined, { dateStyle:'full' });
+  document.getElementById('viewText').textContent = hit.mem.text;
+  viewDlg.showModal();
+});
+document.getElementById('closeBtn').onclick = () => viewDlg.close();
+document.getElementById('delBtn').onclick = async () => {
+  if (!viewing || !confirm('Remove this memory?')) return;
+  await DB.del(viewing.mem.id); Composite.remove(engine.world, viewing); viewDlg.close();
+};
+
+// Export / import backup
+document.getElementById('exportBtn').onclick = async () => {
+  const blob = new Blob([JSON.stringify(await DB.all(), null, 2)], { type:'application/json' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+  a.download = `memory-jar-${new Date().toISOString().slice(0,10)}.json`; a.click();
+};
+document.getElementById('importBtn').onclick = () => document.getElementById('importFile').click();
+document.getElementById('importFile').onchange = async e => {
+  const mems = JSON.parse(await e.target.files[0].text());
+  const have = new Set((await DB.all()).map(m => m.id));
+  for (const m of mems) if (!have.has(m.id)) { await DB.put(m); dropToken(m); }
+};
+
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
+// ---------- Start ----------
+DB.open().then(async () => {
+  (await DB.all()).sort((a,b) => a.date.localeCompare(b.date)).forEach(m => dropToken(m, false));
+  loop();
+});
+</script>
+</body>
+</html>

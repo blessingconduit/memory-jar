@@ -15,7 +15,7 @@
   * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
   body { margin:0; height:100vh; overflow:hidden; font-family:-apple-system, system-ui, sans-serif;
          background:linear-gradient(var(--sky1), var(--sky2)); color:var(--ink); }
-  h1 { text-align:center; margin:12px 0 0; font-size:28px; }
+  h1 { text-align:center; margin:calc(8px + env(safe-area-inset-top)) 0 0; font-size:28px; }
   canvas { display:block; margin:0 auto; touch-action:none; }
   .bar { position:fixed; bottom:0; left:0; right:0; padding:10px 12px calc(10px + env(safe-area-inset-bottom));
          display:flex; gap:8px; justify-content:center; background:rgba(255,255,255,.6); backdrop-filter:blur(8px); }
@@ -133,17 +133,58 @@ function drawJar() {
   ctx.beginPath(); ctx.roundRect(jar.x + jar.w*0.18, jar.y - 34, jar.w*0.64, 30, 8); ctx.fill();
   ctx.restore();
 }
-function drawToken(b) {
-  const { x, y } = b.position, c = COLORS[b.mem.kind] || COLORS.sun;
-  ctx.save(); ctx.translate(x, y); ctx.rotate(b.angle);
-  ctx.fillStyle = c; ctx.beginPath(); ctx.arc(0, 0, R, 0, Math.PI*2); ctx.fill();
-  // face
+function face(r) {
   ctx.fillStyle = '#3b3b3b';
-  ctx.beginPath(); ctx.arc(-R*0.3, -R*0.1, R*0.08, 0, Math.PI*2); ctx.arc(R*0.3, -R*0.1, R*0.08, 0, Math.PI*2); ctx.fill();
-  ctx.strokeStyle = '#3b3b3b'; ctx.lineWidth = 2;
-  ctx.beginPath(); ctx.arc(0, R*0.1, R*0.22, 0.15*Math.PI, 0.85*Math.PI); ctx.stroke();
+  ctx.beginPath(); ctx.arc(-r*0.3, -r*0.08, r*0.08, 0, Math.PI*2); ctx.arc(r*0.3, -r*0.08, r*0.08, 0, Math.PI*2); ctx.fill();
+  ctx.strokeStyle = '#3b3b3b'; ctx.lineWidth = 2; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.arc(0, r*0.1, r*0.2, 0.15*Math.PI, 0.85*Math.PI); ctx.stroke();
   ctx.fillStyle = 'rgba(255,120,120,.5)';
-  ctx.beginPath(); ctx.arc(-R*0.55, R*0.15, R*0.12, 0, Math.PI*2); ctx.arc(R*0.55, R*0.15, R*0.12, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(-r*0.52, r*0.15, r*0.11, 0, Math.PI*2); ctx.arc(r*0.52, r*0.15, r*0.11, 0, Math.PI*2); ctx.fill();
+}
+function bumpy(n, r) {
+  ctx.beginPath();
+  for (let i = 0; i <= 360; i += 4) {
+    const a = i * Math.PI / 180, rr = r * (0.88 + 0.12 * Math.cos(n * a));
+    const x = Math.cos(a) * rr, y = Math.sin(a) * rr;
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+}
+function drawToken(b) {
+  const { x, y } = b.position, kind = b.mem.kind, c = COLORS[kind] || COLORS.sun;
+  ctx.save(); ctx.translate(x, y); ctx.rotate(b.angle); ctx.fillStyle = c;
+  if (kind === 'flower') {
+    // bumpy flower badge with a little tulip in the middle
+    bumpy(9, R); ctx.fill();
+    ctx.strokeStyle = '#c4451f'; ctx.lineWidth = 3; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(0, R*0.2); ctx.lineTo(0, R*0.55); ctx.stroke();
+    ctx.fillStyle = '#c4451f';
+    ctx.beginPath(); ctx.moveTo(-R*0.32, -R*0.3); ctx.lineTo(-R*0.16, -R*0.1); ctx.lineTo(0, -R*0.35);
+    ctx.lineTo(R*0.16, -R*0.1); ctx.lineTo(R*0.32, -R*0.3); ctx.quadraticCurveTo(R*0.34, R*0.22, 0, R*0.22);
+    ctx.quadraticCurveTo(-R*0.34, R*0.22, -R*0.32, -R*0.3); ctx.fill();
+  } else if (kind === 'sprout') {
+    // green octagon with a two-leaf sprout
+    ctx.beginPath();
+    for (let i = 0; i < 8; i++) { const a = Math.PI/8 + i*Math.PI/4; ctx.lineTo(Math.cos(a)*R, Math.sin(a)*R); }
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#3f7d3a'; ctx.strokeStyle = '#3f7d3a'; ctx.lineWidth = 3; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(0, R*0.5); ctx.lineTo(0, -R*0.05); ctx.stroke();
+    ctx.beginPath(); ctx.ellipse(-R*0.22, -R*0.18, R*0.25, R*0.13, -0.5, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(R*0.22, -R*0.25, R*0.28, R*0.14, 0.5, 0, Math.PI*2); ctx.fill();
+  } else if (kind === 'chat') {
+    // speech bubble with three dots
+    ctx.beginPath(); ctx.arc(0, -R*0.05, R*0.92, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(-R*0.55, R*0.5); ctx.lineTo(-R*0.85, R*0.95); ctx.lineTo(-R*0.1, R*0.78); ctx.fill();
+    ctx.fillStyle = '#2f5d62';
+    [-0.35, 0, 0.35].forEach(dx => { ctx.beginPath(); ctx.arc(dx*R, -R*0.05, R*0.1, 0, Math.PI*2); ctx.fill(); });
+  } else {
+    // sunny smiley with tiny rays
+    ctx.strokeStyle = c; ctx.lineWidth = 3; ctx.lineCap = 'round';
+    for (let i = 0; i < 10; i++) { const a = i*Math.PI/5; ctx.beginPath();
+      ctx.moveTo(Math.cos(a)*R*0.85, Math.sin(a)*R*0.85); ctx.lineTo(Math.cos(a)*R*1.0, Math.sin(a)*R*1.0); ctx.stroke(); }
+    ctx.beginPath(); ctx.arc(0, 0, R*0.82, 0, Math.PI*2); ctx.fill();
+    face(R*0.82);
+  }
   ctx.restore();
 }
 function loop() {
